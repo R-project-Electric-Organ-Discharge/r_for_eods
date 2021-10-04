@@ -21,7 +21,7 @@ output_folder<-""
 l_frames<-list()
 eod_cluster<-NULL
 loaded<-FALSE
-#normalized<-FALSE
+normalized<-FALSE
 current_eod_idx<-NULL
 updated_files<-c()
 superimposed_plot<-NULL
@@ -129,12 +129,12 @@ redraw_plot<-function(i, output,session)
     print(i)
     current_eod_idx<<-i
     tmp_eod<-eod_cluster$getEODS(as.numeric(i))
-    #if(!normalized)
-    #{
+    if(!normalized)
+    {
       #print("go for normalization")
       #tmp_eod$getPossibleBaseline()
-      #normalized<<-TRUE
-    #}
+      normalized<<-TRUE
+    }
     print("go for plot")
     current_chart<-tmp_eod$getMainPlot()
     output$plot_eods<-renderPlot(current_chart)

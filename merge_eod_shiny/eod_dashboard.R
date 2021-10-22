@@ -26,23 +26,39 @@ current_eod_idx<-NULL
 updated_files<-c()
 superimposed_plot<-NULL
 cluster_file<-NULL
+q10_flag<-FALSE
+copy_original_frame<-list()
+vex_flag<-FALSE
+vex_value<-NULL
 
-normalize_all_plots<-function()
+
+normalize_all_plots<-function(q10_flag=FALSE, q10_coef=NULL, q10_target=NULL)
 {
     print("__DISPLAY__")
     max_size<-eod_cluster$getSize()
     print(max_size) 
     list_chart <- list()
-    
             for(i in 1:max_size)
             {
                 tmp_eod<-eod_cluster$getEODS(i)
-                tmp_eod$getPossibleBaseline()
+                if(!q10_flag)
+                {
+                  tmp_eod$getPossibleBaseline()
+                  #View(tmp_eod$getNormalizedWave())
+                  copy_original_frame[[i]]<<-tmp_eod$getNormalizedWave()
+                  #View(copy_original_frame[[as.numeric(i)]])
+                  
+                  
+                }
+                else
+                {
+                  tmp_eod$getPossibleBaseline(q10_corr=TRUE, q10=q10_coef, q10_target_temperature=q10_target)
+                }
                 #tmp_eod$normalize()
                 list_chart[[i]]<-tmp_eod$getMainPlot()
             }
            
-      list_chart  
+    
     
 }
 
@@ -137,6 +153,23 @@ redraw_plot<-function(i, output,session)
     }
     print("go for plot")
     current_chart<-tmp_eod$getMainPlot()
+    if(q10_flag)
+    {
+      print("draw_q10")
+      #View(tmp_eod$getNormalizedWave())
+      #View(copy_original_frame)
+      current_chart<-current_chart+geom_line(data=copy_original_frame[[as.numeric(i)]],aes(x = time, y = amplitude), color="green")
+    }
+    if(vex_flag)
+    {
+      tmp_ex=data.frame(tmp_eod$getNormalizedWave())
+      tmp_ex$amplitude=tmp_ex$amplitude*vex_value
+      tmp_min=min(tmp_eod$getNormalizedWave()$amplitude)
+      tmp_max=max(tmp_eod$getNormalizedWave()$amplitude)
+      tmp_ex$amplitude[tmp_ex$amplitude>tmp_max]<-NA
+      tmp_ex$amplitude[tmp_ex$amplitude<tmp_min]<-NA
+      current_chart<-current_chart+geom_line(data=tmp_ex,aes(x = time, y = amplitude), color="red")
+    }
     output$plot_eods<-renderPlot(current_chart)
     output$summary_data<-renderTable(tmp_eod$getMetadata())
     print(tmp_eod$getNormalizedBaseLine())
@@ -208,7 +241,8 @@ superimpose<-function(flag, output, session)
       #}
     }
     superimposed_plot<<-eod_cluster$superimposePlots()
-    output$plot_eods<-renderPlot(eod_cluster$superimposePlots())
+    
+    output$plot_eods<-renderPlot(superimposed_plot)
   }
   else
   {
@@ -224,6 +258,43 @@ shift_wave<-function(i, shift_interval, direction, output, session)
   output$plot_eods<-renderPlot(current_chart)
 }
 
+q10_logic<-function(q10enabled , q10coef, q10temp, select_eod, output, session)
+{
+  
+  if(loaded)
+  {
+    if(q10enabled==TRUE)
+    {
+      normalize_all_plots(TRUE, as.numeric(q10coef), as.numeric(q10temp))
+      q10_flag<<-TRUE
+    }
+    else
+    {
+      normalize_all_plots()
+      q10_flag<<-FALSE
+    }
+    redraw_plot(select_eod,output, session)
+   
+  }
+}
+
+vertical_exageration_logic<-function(enable_vexageration,vertical_exageration, select_eod, output, session)
+{
+  if(loaded)
+  {
+    if(enable_vexageration)
+    {
+      vex_flag<<-TRUE
+      vex_value<<-vertical_exageration
+    }
+    else
+    {
+      vex_flag<<-FALSE
+    }
+    redraw_plot(select_eod,output, session)
+  }
+}
+
 create_averaged_file<-function(output_file)
 {
   if(loaded)
@@ -233,10 +304,10 @@ create_averaged_file<-function(output_file)
   }
 }
 
-change_time_normalization<-function(type_normalization,output, session)
+change_time_alignment<-function(type_alignement,output, session)
 {
-   print(type_normalization)
-   eod_cluster$setTimeNormalization(type_normalization)
+   print(type_alignement)
+   eod_cluster$setTimeAlignment(type_alignement)
    normalize_all_plots()
    tmp_eod<-eod_cluster$getEODS(as.numeric(current_eod_idx))
    current_chart<-tmp_eod$getMainPlot()
@@ -334,8 +405,18 @@ ui <- dashboardPage(
                   accept = c("text/csv",
                              "text/comma-separated-values,text/plain",
                              ".csv")),
-        actionButton("load_cluster", "Load cluster")
-        
+        actionButton("load_cluster", "Load cluster"),
+        textInput("q10temp", "Q10 temperature correction", value=25),
+        numericInput("q10coef", "Q10 coefficient",  1.5,
+                     min = 0,
+                     max = 2.0,
+                     step = 0.1),
+        checkboxInput("q10enabled", "Q10 correction", value = FALSE),
+        numericInput("vertical_exageration", "Vertical exageration",  20,
+                     min = 0,
+                     max = 100,
+                     step = 1),
+        checkboxInput("enable_vexageration", "Vertical exageration", value = FALSE)
     ),
     dashboardBody(useShinyalert(),
                   fluidRow(
@@ -349,28 +430,30 @@ ui <- dashboardPage(
                     actionButton("remove_eod", "Remove"),
                     actionButton("save_update", "Save updates"),
                     selectInput("select_eod", label="Current EOD", choices=c()),
-                    selectInput("time_normalization", label="Time normalization", choices=c(
+                    selectInput("time_alignment", label="Time alignment", choices=c(
                         "halfway"="halfway",
                         "positive_peak"= "positive_peak",
                         "negative_peak"= "negative_peak"
                       
                     )),
-                    checkboxInput("superimpose", "Superimpose", value = FALSE),
-                    numericInput(
-                      "shift",
-                      "Shift",
-                      0,
-                      min = 0,
-                      max = 1.0,
-                      step = 0.01,
-                    ),
-                    actionButton("shift_right", "Shift right"),
-                    actionButton("shift_left", "Shift left"),
+                    
+                    #numericInput(
+                    #  "shift",
+                    #  "Shift",
+                    #  0,
+                    #  min = 0,
+                    #  max = 1.0,
+                    #  step = 0.01,
+                    #),
+                    #actionButton("shift_right", "Shift right"),
+                    #actionButton("shift_left", "Shift left"),
                     actionButton("save_superimposed", "Save superimposed plot"),
                     actionButton("create_averaged", "Save averaged signal"),
+                    checkboxInput("superimpose", "Superimpose", value = FALSE)
+                    
                       
                     ),
-                    htmlOutput("summary_data"),
+                    htmlOutput("summary_data")
                   )
 )
 
@@ -430,12 +513,12 @@ server <- function(input, output, session) {
                  {
                    invert_phase(output, session)
                  })
-    observeEvent(input$time_normalization,
+    observeEvent(input$time_alignment,
                  {
                    if(loaded)
                    {
-                     print("tried_to_normalize")
-                     change_time_normalization(input$time_normalization,output, session)
+                     print("tried_to_align")
+                     change_time_alignment(input$time_alignment,output, session)
                      redraw_plot(input$select_eod,output, session)
                    }
                  })
@@ -487,6 +570,26 @@ server <- function(input, output, session) {
                    output_folder <<-input$output_folder
                    create_averaged_file(paste0(output_folder,"/",cluster_file,"_averaged.csv"))
                  })
+    observeEvent(input$q10coef, 
+                 {
+                   q10_logic(input$q10enabled , input$q10coef, input$q10temp, input$select_eod, output, session)
+                 })
+    observeEvent(input$q10temp, 
+                 {
+                   q10_logic(input$q10enabled , input$q10coef, input$q10temp, input$select_eod, output, session)
+                 })
+     observeEvent(input$q10enabled, 
+                  {
+                    q10_logic(input$q10enabled , input$q10coef, input$q10temp, input$select_eod, output, session)
+                  })
+     observeEvent(input$vertical_exageration,
+                  {
+                    vertical_exageration_logic(input$enable_vexageration,input$vertical_exageration, input$select_eod, output, session)
+                  })
+     observeEvent(input$enable_vexageration,
+                  {
+                    vertical_exageration_logic(input$enable_vexageration,input$vertical_exageration, input$select_eod, output, session)
+                  })
 }
 
 # Run the application 

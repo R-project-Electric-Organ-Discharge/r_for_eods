@@ -11,10 +11,12 @@ global_encoding="utf-8"
 global_treshold <- 0.02
 global_nb_peaks<-7
 global_arbitrary_baseline <-40
+global_q10<-1.5
+global_q10_target_temperature<-25
 
 global_baseline_done = FALSE
 global_baseline_type="meanvar"
-global_time_normalization_type="halfway"
+global_time_alignment_type="halfway"
 
 Eod <-setRefClass("Eod",
                   fields = list(
@@ -76,8 +78,10 @@ Eod <-setRefClass("Eod",
                     periodgram_plot = "ANY",
                     derivate_plot = "ANY", 
                     base_filename="character",
-					time_normalization="character",
-					biggest_normalized_time_interval="numeric"
+					time_alignment="character",
+					biggest_normalized_time_interval="numeric",
+					q10="numeric",
+					q10_target_temperature="numeric"
                   )
                   
 )
@@ -106,9 +110,11 @@ Eod$methods(
              maxPeaks = global_nb_peaks,
              arbitraryBaseline= global_arbitrary_baseline,
              baselineType=global_baseline_type,
-			 time_normalization=global_time_normalization_type,
+			 time_alignment=global_time_alignment_type,
 			 is_normalized=FALSE,
 			 biggest_normalized_time_interval=0,
+			 q10=global_q10,
+			 q10_target_temperature=global_q10_target_temperature,
              ...
     )
     {
@@ -147,8 +153,10 @@ Eod$methods(
       baselineType <<- baselineType 
       base_filename<<-basename(file)
       specimenIdentifier<<- paste(projectName, collectionEvent, specimenTag, sep="_")
-	  time_normalization<<- time_normalization
+	  time_alignment<<- time_alignment
 	  biggest_normalized_time_interval<<-0
+	  q10<<-q10
+	  q10_target_temperature<<-q10_target_temperature
       .self
     }
   ,
@@ -212,6 +220,22 @@ Eod$methods(
   setMetadata=function(metadata)
   {
     file_metadata<<-metadata
+  },
+  getQ10=function()
+  {
+    q10
+  },
+  setQ10=function(q10)
+  {
+    q10<<-q10
+  },
+  getQ10TargetTemperature=function()
+  {
+    q10_target_temperature
+  },
+  setQ10TargetTemperature=function(q10_target_temperature)
+  {
+    q10_target_temperature<<-q10_target_temperature
   },
   getBaseFilename=function()
   {
@@ -333,7 +357,7 @@ Eod$methods(
     frame_absolute
   }
   ,
-  getPossibleBaseline=function(type="meanvar")
+  getPossibleBaseline=function(type="meanvar",q10_corr=FALSE, q10=global_q10, q10_target_temperature=global_q10_target_temperature)
   {
     
     if(global_baseline_done==FALSE)
@@ -355,21 +379,21 @@ Eod$methods(
       inflexion_points=c(paste(v_changepoints_mean,collapse=" "),paste(v_changepoints_var,collapse=" "), paste(v_changepoints_meanvar,collapse=" "),paste(c(arbitraryBaseline,last_by_arbitrary_baseline),collapse=" "))
     )
     
-    chooseBaselineAndNormalize(type)
+    chooseBaselineAndNormalize(type,q10_corr, q10, q10_target_temperature)
     frame_baseline
   },
   isNormalized=function()
   {
 	is_normalized
   },
-  setTimeNormalization=function(type)
+  setTimeAlignment=function(type)
   {
-	time_normalization<<-type
+	time_alignment<<-type
   }
   ,
-  getTimeNormalization=function()
+  getTimeAlignment=function()
   {
-	time_normalization
+	time_alignment
   },
   #main sc function
   normalize = function(type=baselineType)
@@ -439,10 +463,24 @@ Eod$methods(
 	print("biggest normalized time interval")
 	print(biggest_normalized_time_interval)
 	is_normalized<<-TRUE
-  }
-  ,
-  chooseBaselineAndNormalize = function(type) #type = "mean, meanvar, var, arbitrary
+  },
+  applyQ10 =function(q10, q10_target_temperature)
   {
+	if(!is.null(recordingTemperature))
+	{
+		if(recordingTemperature!=0)
+		{
+			print(q10_target_temperature)
+			print(recordingTemperature)
+			normalized_wave$time<<- normalized_wave$time * q10 ^((q10_target_temperature-recordingTemperature)/10)
+		}
+	}
+  }
+
+  ,
+  chooseBaselineAndNormalize = function(type,q10_corr=FALSE, q10=global_q10, q10_target_temperature=25) #type = "mean, meanvar, var, arbitrary
+  {
+  
     #print(type)
     baselineType<<-type
     if(baselineType=="mean")
@@ -469,6 +507,10 @@ Eod$methods(
     
     #normalize amplitude
     normalized_wave <<- data.frame(file_wave)
+	if(q10_corr)
+	{
+		applyQ10(q10, q10_target_temperature)
+	}
     
     normalized_wave$amplitude <<- normalized_wave$amplitude - chosen_baseline
     
@@ -477,7 +519,9 @@ Eod$methods(
     #normalize time
 	#print("TRY_TO_NORMALIZE_TIME")
 	#print(time_normalization)
-    normalized_wave<<-normalize_and_center_time(normalized_wave, time_normalization)
+    #normalized_wave<<-normalize_and_center_time(normalized_wave, time_normalization)
+	#no time normalization
+	normalized_wave<<-center_time(normalized_wave, time_alignment)
     #View(normalized_wave)
 	detect_landmarks_after_normalization()
     
@@ -660,16 +704,22 @@ Eod$methods(
   },
   #end periodgram
   #normalize time(private)
-  normalize_and_center_time=function(p_frame,time_normalization=global_time_normalization_type)
+  normalize_and_center_time=function(p_frame,center_type=global_time_alignment_type)
   {
-	#print("NORMALIZATION_TYPE=")
-	#print(time_normalization)
-	#normalize time
+	
     p_frame$time<- p_frame$time / (max(p_frame$time) - min(p_frame$time))
+	p_frame<-center_time(p_frame,center_type )
+	p_frame
+    
+  },
+   center_time=function(p_frame,center_type=global_time_alignment_type)
+  {
+	
+    
 	#find center
 	max_pos = which(p_frame$amplitude ==(max(p_frame$amplitude)))
 	min_pos = which(p_frame$amplitude ==(min(p_frame$amplitude)))
-    if(time_normalization=="halfway")
+    if(center_type=="halfway")
 	{		
 		interv<-c(max_pos, min_pos)			
 		#if min before max
@@ -677,12 +727,12 @@ Eod$methods(
 		time_center_value = (p_frame[interv_sorted[2],1]+p_frame[interv_sorted[1],1]) /2		
 				
 	}
-	else if(time_normalization=="positive_peak")
+	else if(center_type=="positive_peak")
 	{		
 		#print("go_positive")
 		time_center_value=p_frame[max_pos,1]
 	}
-	else if(time_normalization=="negative_peak")
+	else if(center_type=="negative_peak")
 	{
 		#print("go_negative")
 		time_center_value=p_frame[min_pos,1]
@@ -749,8 +799,9 @@ EodCluster <-setRefClass("EodClusters",
                            merged_index="ANY",
                            original_files="ANY", 
 						   cluster_files="ANY",					
-						   time_normalization="character",
-						   averaged_wave="ANY"
+						   time_alignment="character",
+						   averaged_wave="ANY",
+						   superimposed_frame="ANY"
                          )
 )
 
@@ -760,19 +811,17 @@ EodCluster$methods()
 
 EodCluster$methods(
   initialize=
-    function(sourceFiles="N/A", baselineType=global_baseline_type, true_filenames=NULL, cluster_files=NULL, encoding = global_encoding,time_normalization=global_time_normalization_type, ...)
+    function(sourceFiles="N/A", baselineType=global_baseline_type, true_filenames=NULL, cluster_files=NULL, encoding = global_encoding,time_alignment=global_time_alignment_type, ...)
     {
       callSuper(...)
-	  time_normalization<<-time_normalization
+	  time_alignment<<-time_alignment
       original_files<<-c()
 	  source_files_to_eod<<-c()
 	  original_files_to_eod<<-c()
 	  uploaded_files_to_eod<<-c()
       objs<-list()
       baselineType<<-baselineType
-      #print("ORIGINAL_NAMES")
-	  #print(true_filenames)
-	   #print(typeof(true_filenames))
+      superimposed_frame<<-data.frame()
 	  
       if(!is.null(cluster_files))
       {
@@ -803,15 +852,7 @@ EodCluster$methods(
 		  }
           
 		  i <- i + 1
-		}
-        #print("NEW_CLUSTER")
-        #print(cluster_files)
-		#print("ORIGINAL_FILE")
-		#print(original_files)
-		#print("original_files_to_eod")
-		#print(original_files_to_eod)
-		
-        
+		}       
       }
       else
       {
@@ -927,8 +968,14 @@ EodCluster$methods(
       colnames(tmp_frame)<-c("time", "amplitude", "filename")
       tmp_plot<- tmp_plot + geom_line(data = tmp_frame, aes(x=time, y=amplitude, color=filename) ) 
     }
+	superimposed_frame<<-df
     tmp_plot
   },
+  getSuperimposedFrame=function()
+  {
+	superimposed_frame
+  }
+  ,
   superimposeAndSavePlots=function(folder, name_file="merged_eod_plot", specimen_id="")
   {
     tmp_plot<-superimposePlots()
@@ -1227,20 +1274,20 @@ EodCluster$methods(
 	uploaded_files_to_eod<<-uploaded_files_to_eod[-i]
 	source_files_to_eod<<-source_files_to_eod[-i]
   },
-  setTimeNormalization=function(type)
+  setTimeAlignment=function(type)
   {
-	time_normalization<<-type
+	time_alignment<<-type
 	invisible(lapply(eodObjects, 
           function(eod)
           {
-			eod$setTimeNormalization(time_normalization)
+			eod$setTimeAlignment(time_alignment)
 		  }
 		  ))
   }
   ,
-  getTimeNormalization=function()
+  getTimeAlignment=function()
   {
-	time_normalization
+	time_alignment
   },
   find_closest_amplitude=function(time, df, control_interval)
   {
